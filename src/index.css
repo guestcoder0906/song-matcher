@@ -1,1 +1,16 @@
 @import "tailwindcss";
+
+@layer utilities {
+  .markdown-body strong {
+    @apply font-semibold text-white;
+  }
+  .markdown-body p {
+    @apply mb-4;
+  }
+  .markdown-body ul {
+    @apply list-disc pl-6 mb-4 marker:text-green-500;
+  }
+  .markdown-body h3 {
+    @apply font-semibold text-white text-lg mt-6 mb-2;
+  }
+}

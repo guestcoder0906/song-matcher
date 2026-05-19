@@ -6,6 +6,9 @@ import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 
 const upload = multer({ dest: "uploads/" });
+const userSpotifyCache = new Map<string, { data: string, timestamp: number }>();
+const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
+
 
 async function startServer() {
   const app = express();
@@ -29,7 +32,9 @@ async function startServer() {
       
       const uploadResult = await ai.files.upload({
         file: req.file.path,
-        mimeType: req.file.mimetype,
+        config: {
+          mimeType: req.file.mimetype,
+        },
       });
 
       // If it's a video, we need to poll until it's processed
@@ -105,6 +110,126 @@ async function startServer() {
     } catch (error: any) {
       console.error(error);
       res.status(500).json({ error: error.message || "An expected error occurred." });
+    }
+  });
+
+  app.get("/api/auth/spotify", (req, res) => {
+    const scope = "user-read-private user-read-email user-top-read user-read-recently-played playlist-read-private playlist-read-collaborative";
+    const baseUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+    const redirect_uri = `${baseUrl}/api/auth/spotify/callback`;
+    const client_id = process.env.SPOTIFY_CLIENT_ID;
+    
+    if (!client_id) {
+      return res.status(500).send("SPOTIFY_CLIENT_ID not configured.");
+    }
+
+    const authUrl = new URL("https://accounts.spotify.com/authorize");
+    authUrl.searchParams.append("response_type", "code");
+    authUrl.searchParams.append("client_id", client_id);
+    authUrl.searchParams.append("scope", scope);
+    authUrl.searchParams.append("redirect_uri", redirect_uri);
+    authUrl.searchParams.append("show_dialog", "true");
+
+    res.redirect(authUrl.toString());
+  });
+
+  app.get("/api/auth/spotify/callback", async (req, res) => {
+    const code = req.query.code as string;
+    const baseUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
+    const redirect_uri = `${baseUrl}/api/auth/spotify/callback`;
+
+    try {
+      const authResp = await fetch("https://accounts.spotify.com/api/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Authorization": "Basic " + Buffer.from(`${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`).toString("base64"),
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri,
+        }).toString(),
+      });
+
+      const authData = await authResp.json();
+      if (!authResp.ok) throw new Error(authData.error_description || authData.error);
+
+      res.redirect(`/?spotify_token=${authData.access_token}`);
+    } catch (error: any) {
+      res.redirect(`/?error=${encodeURIComponent(error.message)}`);
+    }
+  });
+
+  app.post("/api/profile-taste", async (req, res) => {
+    const { accessToken, prompt } = req.body;
+    if (!accessToken) return res.status(400).json({ error: "No Spotify access token provided." });
+  
+    try {
+      let spotifyDataString = "";
+
+      if (userSpotifyCache.has(accessToken) && (Date.now() - userSpotifyCache.get(accessToken)!.timestamp) < CACHE_TTL_MS) {
+        spotifyDataString = userSpotifyCache.get(accessToken)!.data;
+      } else {
+        const fetchSpotify = async (endpoint: string) => {
+          const r = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
+            headers: { "Authorization": `Bearer ${accessToken}` }
+          });
+          if (r.status === 429) {
+            const retryAfter = r.headers.get('retry-after') || "5";
+            throw new Error(`Spotify rate limit hit. Try again in ${retryAfter} seconds.`);
+          }
+          if (!r.ok) {
+            console.warn(`Spotify API error on ${endpoint}`, r.status);
+            return { items: [] };
+          }
+          return r.json();
+        };
+    
+        const [topArtistsLong, topArtistsShort, topTracksLong, topTracksShort, playlists, recentlyPlayed] = await Promise.all([
+          fetchSpotify('me/top/artists?time_range=long_term&limit=15'),
+          fetchSpotify('me/top/artists?time_range=short_term&limit=10'),
+          fetchSpotify('me/top/tracks?time_range=long_term&limit=15'),
+          fetchSpotify('me/top/tracks?time_range=short_term&limit=10'),
+          fetchSpotify('me/playlists?limit=10'),
+          fetchSpotify('me/player/recently-played?limit=15')
+        ]);
+    
+        const artistLong = topArtistsLong.items?.map((a: any) => a.name).join(", ");
+        const artistShort = topArtistsShort.items?.map((a: any) => a.name).join(", ");
+        const trackLong = topTracksLong.items?.map((t: any) => `${t.name} by ${t.artists?.[0]?.name}`).join(", ");
+        const trackShort = topTracksShort.items?.map((t: any) => `${t.name} by ${t.artists?.[0]?.name}`).join(", ");
+        const playlistNames = playlists.items?.map((p: any) => p.name).join(", ");
+        const recentNames = recentlyPlayed.items?.map((i: any) => `${i.track?.name} by ${i.track?.artists?.[0]?.name}`).join(", ");
+
+        spotifyDataString = `Top Artists (All Time): ${artistLong || "None"}
+Top Artists (Recent Month): ${artistShort || "None"}
+Top Tracks (All Time): ${trackLong || "None"}
+Top Tracks (Recent Month): ${trackShort || "None"}
+Public/Saved Playlists: ${playlistNames || "None"}
+Recently Played: ${recentNames || "None"}`;
+
+        userSpotifyCache.set(accessToken, { data: spotifyDataString, timestamp: Date.now() });
+      }
+  
+      const finalPrompt = `You are an expert music psychologist and behavioral analyst. Here is a comprehensive overview of a user's Spotify history and habits:
+  
+${spotifyDataString}
+  
+User's query/prompt: "${prompt || "Tell me something I don't know about myself based on my music taste. Be specific, insightful, and slightly surprising. Do not be literal."}"
+  
+Provide a deep, highly accurate, and smart analysis based on the data. Do NOT simply list back the artists or tracks to the user. Present a psychological or aesthetic profile and explicitly answer their prompt if provided. Keep it engaging, perceptive, and diverse in your conclusions.`;
+  
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: finalPrompt,
+      });
+  
+      res.json({ analysis: response.text });
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: err.message || "Failed to analyze taste." });
     }
   });
 
