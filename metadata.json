@@ -1,0 +1,6 @@
+{
+  "name": "Spotify Vibe Matcher",
+  "description": "Upload a photo or video, and Gemini will find a matching Spotify soundtrack using the Spotify API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
