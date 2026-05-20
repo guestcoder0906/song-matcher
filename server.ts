@@ -3,7 +3,6 @@ import path from "path";
 import multer from "multer";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 
 const upload = multer({ dest: "/tmp/uploads/" });
 const userSpotifyCache = new Map<string, { data: string, timestamp: number }>();
@@ -264,6 +263,7 @@ export default app;
 
 async function startServer() {
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
