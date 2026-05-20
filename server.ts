@@ -81,7 +81,13 @@ async function startServer() {
         body: "grant_type=client_credentials",
       });
 
-      const authData = await authResp.json();
+      const authDataText = await authResp.text();
+      let authData;
+      try {
+        authData = JSON.parse(authDataText);
+      } catch (e) {
+        throw new Error("Invalid response from Spotify Auth API");
+      }
       if (!authResp.ok || !authData.access_token) {
         throw new Error("Failed to authenticate with Spotify API: " + (authData.error_description || authData.error));
       }
@@ -96,7 +102,13 @@ async function startServer() {
         },
       });
 
-      const searchData = await searchResp.json();
+      const searchDataText = await searchResp.text();
+      let searchData;
+      try {
+        searchData = JSON.parse(searchDataText);
+      } catch (e) {
+        throw new Error("Invalid response from Spotify Search API");
+      }
       
       if (!searchResp.ok) {
         throw new Error("Spotify search failed: " + (searchData.error?.message || "Unknown error"));
@@ -152,8 +164,14 @@ async function startServer() {
         }).toString(),
       });
 
-      const authData = await authResp.json();
-      if (!authResp.ok) throw new Error(authData.error_description || authData.error);
+      const authDataText = await authResp.text();
+      let authData;
+      try {
+        authData = JSON.parse(authDataText);
+      } catch(e) {
+        throw new Error("Invalid response from Spotify Auth API");
+      }
+      if (!authResp.ok) throw new Error(authData?.error_description || authData?.error || "Failed to get access token");
 
       res.redirect(`/?spotify_token=${authData.access_token}`);
     } catch (error: any) {
@@ -183,7 +201,13 @@ async function startServer() {
             console.warn(`Spotify API error on ${endpoint}`, r.status);
             return { items: [] };
           }
-          return r.json();
+          const text = await r.text();
+          try {
+            return JSON.parse(text);
+          } catch(e) {
+            console.warn(`Spotify API returned non-JSON on ${endpoint}`);
+            return { items: [] };
+          }
         };
     
         const [topArtistsLong, topArtistsShort, topTracksLong, topTracksShort, playlists, recentlyPlayed] = await Promise.all([

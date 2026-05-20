@@ -59,7 +59,15 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accessToken: spotifyToken, prompt: profilePrompt }),
       });
-      const data = await res.json();
+      
+      let data;
+      const responseText = await res.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        throw new Error(res.ok ? "Invalid JSON response from server." : responseText || "Failed to analyze taste");
+      }
+
       if (!res.ok) throw new Error(data.error || "Failed to analyze taste");
       setProfileResult(data.analysis);
     } catch (err: any) {
@@ -121,7 +129,14 @@ export default function App() {
         body: formData,
       });
 
-      const data = await res.json();
+      let data;
+      const responseText = await res.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        throw new Error(res.ok ? "Invalid JSON response from server." : responseText || "Failed to match song");
+      }
+      
       if (!res.ok) {
         throw new Error(data.error || "Failed to match song");
       }
